@@ -41,7 +41,7 @@ This POC keeps only the essentials:
 ## Repository layout
 ```
 .
-├── POC.md
+├── README.md
 ├── connect-image/
 │   └── Dockerfile
 ├── poc/
@@ -166,3 +166,28 @@ kubectl --context minikube-b -n database run -it --rm psql \
   - `poc/connect/kafka-connect-jdbc-sink.yaml`
 - APISIX is deployed but not required in the data path for this POC.
 - On Linux, replace `base64 -D` with `base64 -d` in the commands above.
+
+## Sample CDC event (Debezium)
+```json
+{
+  "payload": {
+    "before": null,
+    "after": {
+      "id": 1,
+      "city": "Testville",
+      "temperature_c": "BM4=",
+      "observed_at": "2026-02-13T13:44:02.234712Z"
+    },
+    "source": {
+      "connector": "postgresql",
+      "name": "source",
+      "db": "source_db",
+      "schema": "public",
+      "table": "weather_readings"
+    },
+    "op": "c",
+    "ts_ms": 1770990242726
+  }
+}
+```
+`temperature_c` uses the Kafka Connect Decimal logical type and is base64-encoded.
