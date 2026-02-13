@@ -1,0 +1,10 @@
+replicaCount: 1
+service:
+  type: NodePort
+  http:
+    enabled: true
+    servicePort: 80
+  tls:
+    enabled: false
+etcd:
+  replicaCount: 1

@@ -1,0 +1,16 @@
+apiVersion: acid.zalan.do/v1
+kind: postgresql
+metadata:
+  name: sink-postgres
+  namespace: database
+spec:
+  teamId: poc
+  volume:
+    size: 1Gi
+  numberOfInstances: 1
+  users:
+    sink-user: [login]
+  databases:
+    sink_db: sink-user
+  postgresql:
+    version: "15"

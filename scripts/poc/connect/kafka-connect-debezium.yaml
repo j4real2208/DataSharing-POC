@@ -1,0 +1,19 @@
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaConnect
+metadata:
+  name: source-connect
+  namespace: messaging
+  annotations:
+    strimzi.io/use-connector-resources: "true"
+spec:
+  image: local/kafka-connect:3.4.1
+  replicas: 1
+  bootstrapServers: source-kafka-kafka-bootstrap:9092
+  groupId: source-connect
+  configStorageTopic: source-connect-configs
+  offsetStorageTopic: source-connect-offsets
+  statusStorageTopic: source-connect-status
+  config:
+    config.storage.replication.factor: 1
+    offset.storage.replication.factor: 1
+    status.storage.replication.factor: 1
