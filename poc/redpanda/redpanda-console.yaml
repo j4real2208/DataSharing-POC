@@ -1,0 +1,68 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redpanda-console-config
+  namespace: messaging
+data:
+  config.yaml: |
+    kafka:
+      brokers:
+        - sink-kafka-kafka-bootstrap:9092
+      schemaRegistry:
+        enabled: true
+        urls:
+          - http://<MINIKUBE_SINK>:32080/apis/ccompat/v7
+    connect:
+      enabled: true
+      clusters:
+        - name: "sink-connect"
+          url: "http://sink-connect-connect-api:8083"
+    server:
+      listenPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redpanda-console
+  namespace: messaging
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redpanda-console
+  template:
+    metadata:
+      labels:
+        app: redpanda-console
+    spec:
+      containers:
+        - name: redpanda-console
+          image: docker.redpanda.com/redpandadata/console:v2.6.0
+          args:
+            - --config.filepath=/etc/console/config.yaml
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: console-config
+              mountPath: /etc/console
+              readOnly: true
+      volumes:
+        - name: console-config
+          configMap:
+            name: redpanda-console-config
+            items:
+              - key: config.yaml
+                path: config.yaml
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redpanda-console
+  namespace: messaging
+spec:
+  selector:
+    app: redpanda-console
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

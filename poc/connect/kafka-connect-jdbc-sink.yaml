@@ -1,0 +1,26 @@
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaConnect
+metadata:
+  name: sink-connect
+  namespace: messaging
+  annotations:
+    strimzi.io/use-connector-resources: "true"
+spec:
+  image: local/kafka-connect:3.4.1
+  replicas: 1
+  bootstrapServers: sink-kafka-kafka-bootstrap:9092
+  groupId: sink-connect
+  configStorageTopic: sink-connect-configs
+  offsetStorageTopic: sink-connect-offsets
+  statusStorageTopic: sink-connect-status
+  config:
+    config.storage.replication.factor: 1
+    offset.storage.replication.factor: 1
+    status.storage.replication.factor: 1
+    plugin.path: /opt/kafka/plugins
+    key.converter: io.apicurio.registry.utils.converter.AvroConverter
+    value.converter: io.apicurio.registry.utils.converter.AvroConverter
+    key.converter.apicurio.registry.url: http://<MINIKUBE_SINK>:32080/apis/registry/v2
+    value.converter.apicurio.registry.url: http://<MINIKUBE_SINK>:32080/apis/registry/v2
+    key.converter.apicurio.registry.auto-register: true
+    value.converter.apicurio.registry.auto-register: true

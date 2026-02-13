@@ -1,0 +1,62 @@
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# Shell script temp files
+/tmp/
+tmpfile
+
+# Build artifacts
+*.tar
+*.tar.gz
+*.zip
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Local configuration
+.env
+.env.local
+.env.*.local
+
+# Minikube/Kubernetes local files
+minikube-data/
+kubeconfig*
+
+# Docker
+*.dockerfile
+.dockerignore
+
+# Secrets (in case any are accidentally created locally)
+*secret*
+*.key
+*.pem
+
+# Maven/Gradle
+target/
+build/
+*.class
+
+# Node (if used)
+node_modules/
+package-lock.json
+yarn.lock
+
+AGENTS.md

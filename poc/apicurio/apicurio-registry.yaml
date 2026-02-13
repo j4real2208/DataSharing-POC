@@ -1,0 +1,61 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: apicurio-registry-pvc
+  namespace: messaging
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: apicurio-registry
+  namespace: messaging
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: apicurio-registry
+  template:
+    metadata:
+      labels:
+        app: apicurio-registry
+    spec:
+      containers:
+        - name: apicurio-registry
+          image: quay.io/apicurio/apicurio-registry:3.1.0
+          env:
+            - name: REGISTRY_STORAGE
+              value: sql
+            - name: QUARKUS_DATASOURCE_DB_KIND
+              value: h2
+            - name: QUARKUS_DATASOURCE_JDBC_URL
+              value: jdbc:h2:file:/var/lib/apicurio/registry;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: apicurio-data
+              mountPath: /var/lib/apicurio
+      volumes:
+        - name: apicurio-data
+          persistentVolumeClaim:
+            claimName: apicurio-registry-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: apicurio-registry
+  namespace: messaging
+spec:
+  type: NodePort
+  selector:
+    app: apicurio-registry
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      nodePort: 32080
