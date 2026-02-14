@@ -38,3 +38,20 @@ INSERT INTO public.weather_readings (city, temperature_c) VALUES
 
 
      psql -U postgres -d sink_db -h localhost
+
+
+CLASSPATH="/opt/kafka/libs/*:/opt/kafka/plugins/apicurio-converters/*" \
+/opt/kafka/bin/kafka-console-consumer.sh \
+  --bootstrap-server source-kafka-kafka-bootstrap:9092 \
+  --topic source.public.weather_readings \
+  --from-beginning \
+  --group debug-avro-all-$(date +%s) \
+  --skip-message-on-error \
+  --timeout-ms 30000 \
+  --formatter org.apache.kafka.tools.consumer.DefaultMessageFormatter \
+  --property key.deserializer=org.apache.kafka.common.serialization.StringDeserializer \
+  --property value.deserializer=io.apicurio.registry.serde.avro.AvroKafkaDeserializer \
+  --property value.deserializer.apicurio.registry.url=http://172.17.0.3:32080/apis/registry/v2 \
+  --property print.key=true \
+  --property print.value=true \
+  --property key.separator=" | "

@@ -16,6 +16,7 @@ fi
 
 docker build -t "$IMAGE" \
   --build-arg DEBEZIUM_VERSION=3.4.1.Final \
+  --build-arg APICURIO_VERSION=3.1.7 \
   connect-image
 minikube -p "$CTX" image load "$IMAGE"
 minikube -p minikube-b image load "$IMAGE"

@@ -48,6 +48,8 @@ This POC keeps only the essentials:
 │   ├── 00-namespaces.yaml
 │   ├── apisix/
 │   │   └── values.yaml
+│   ├── apicurio/
+│   │   └── apicurio-registry.yaml
 │   ├── connect/
 │   │   ├── debezium-connector.yaml
 │   │   ├── jdbc-sink-connector.yaml
@@ -60,9 +62,11 @@ This POC keeps only the essentials:
 │   │   ├── kafka-sink-nodepool.yaml
 │   │   ├── mirrormaker2-source-to-sink.yaml
 │   │   └── topics.yaml
-│   └── postgres/
-│       ├── source-postgres.yaml
-│       └── sink-postgres.yaml
+│   ├── postgres/
+│   │   ├── source-postgres.yaml
+│   │   └── sink-postgres.yaml
+│   └── redpanda/
+│       └── redpanda-console.yaml
 └── scripts/
     ├── build-connect-image.sh
     ├── deploy-mirrormaker.sh
@@ -158,6 +162,26 @@ kubectl --context minikube-b -n database run -it --rm psql \
   --image=postgres:15 --restart=Never \
   --env="PGPASSWORD=$SINK_DB_PASSWORD" -- \
   psql -h sink-postgres -U sink-user -d sink_db -c "SELECT * FROM public.weather_readings;"
+```
+
+## 7) Redpanda Console + Apicurio Registry (optional)
+Deploy Apicurio Registry (with PVC) plus Redpanda Console:
+```bash
+kubectl --context minikube-b -n messaging apply -f poc/apicurio/apicurio-registry.yaml
+kubectl --context minikube-b -n messaging apply -f poc/redpanda/redpanda-console.yaml
+```
+
+Open the Console UI and Registry locally:
+```bash
+kubectl --context minikube-b -n messaging port-forward svc/redpanda-console 8080:8080
+kubectl --context minikube-b -n messaging port-forward svc/apicurio-registry 8081:8080
+```
+
+Console is configured to read from `sink-kafka-kafka-bootstrap:9092` and the registry at `http://apicurio-registry:8080`.
+Kafka Connect workers are configured to use Apicurio for JSON Schema; rebuild and reload the Connect image after changes:
+```bash
+./scripts/build-connect-image.sh minikube-a
+./scripts/build-connect-image.sh minikube-b
 ```
 
 ## Notes
