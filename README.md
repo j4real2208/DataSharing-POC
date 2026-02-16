@@ -63,6 +63,7 @@ This POC keeps only the essentials:
 │   │   ├── mirrormaker2-source-to-sink.yaml
 │   │   └── topics.yaml
 │   ├── postgres/
+│   │   ├── init-weather-readings-job.yaml
 │   │   ├── source-postgres.yaml
 │   │   └── sink-postgres.yaml
 │   └── redpanda/
@@ -74,9 +75,7 @@ This POC keeps only the essentials:
     ├── deploy-sink.sh
     ├── refresh-strimzi-crds.sh
     ├── test-debezium.sh
-    ├── verify.sh
-    └── poc/
-        └── 00-namespaces.yaml
+    └── verify.sh
 ```
 
 ## 1) Prereqs
@@ -151,6 +150,48 @@ SQL
 ```
 
 Debezium will emit CDC events into Kafka (topics with prefix `source`).
+
+### Option B: run the Kubernetes init job
+`./scripts/deploy-source.sh minikube-a` now runs this job automatically.  
+Use these commands to run/re-run it manually.
+This uses `poc/postgres/init-weather-readings-job.yaml` and runs the SQL from inside the cluster against `source-postgres`.
+```bash
+kubectl --context=minikube-a apply -f poc/postgres/init-weather-readings-job.yaml
+kubectl --context=minikube-a -n database logs -f job/init-weather-readings
+```
+
+Re-run the job:
+```bash
+kubectl --context=minikube-a -n database delete job init-weather-readings
+kubectl --context=minikube-a apply -f poc/postgres/init-weather-readings-job.yaml
+```
+
+### Option C: read decoded CDC messages from the existing source Connect pod
+Use the running Kafka Connect pod (`source-connect`) to consume and print decoded Avro messages from `source.public.weather_readings`.
+```bash
+CONNECT_POD=$(kubectl --context=minikube-a -n messaging get pods \
+  -l strimzi.io/cluster=source-connect,strimzi.io/kind=KafkaConnect \
+  -o jsonpath='{.items[0].metadata.name}')
+
+kubectl --context=minikube-a -n messaging exec "$CONNECT_POD" -- /bin/bash -lc '
+CLASSPATH="/opt/kafka/libs/*:/opt/kafka/plugins/apicurio-converters/*" \
+/opt/kafka/bin/kafka-console-consumer.sh \
+  --bootstrap-server source-kafka-kafka-bootstrap:9092 \
+  --topic source.public.weather_readings \
+  --from-beginning \
+  --group debug-avro-all-$(date +%s) \
+  --skip-message-on-error \
+  --timeout-ms 30000 \
+  --formatter org.apache.kafka.tools.consumer.DefaultMessageFormatter \
+  --property key.deserializer=org.apache.kafka.common.serialization.StringDeserializer \
+  --property value.deserializer=io.apicurio.registry.serde.avro.AvroKafkaDeserializer \
+  --property value.deserializer.apicurio.registry.url=http://172.17.0.3:32080/apis/registry/v2 \
+  --property print.key=true \
+  --property print.value=true \
+  --property key.separator=" | "
+'
+```
+You should see rows printed as key/value records (or no output if the topic has no matching messages yet).
 
 ## 6) Verify data landed in sink Postgres
 ```bash

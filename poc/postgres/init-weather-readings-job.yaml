@@ -1,0 +1,50 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: init-weather-readings
+  namespace: database
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: init-db
+          image: postgres:15
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POSTGRES_DB
+              value: source_db
+            - name: POSTGRES_USER
+              value: source-user
+            - name: POSTGRES_HOST
+              value: source-postgres
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: source-user.source-postgres.credentials.postgresql.acid.zalan.do
+                  key: password
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              echo "Running DB initialization on ${POSTGRES_HOST}/${POSTGRES_DB}..."
+              export PGPASSWORD="${POSTGRES_PASSWORD}"
+              psql -v ON_ERROR_STOP=1 -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" <<'SQL'
+              CREATE TABLE IF NOT EXISTS public.weather_readings (
+                id serial PRIMARY KEY,
+                city text NOT NULL,
+                temperature_c numeric(5,2) NOT NULL,
+                observed_at timestamptz NOT NULL DEFAULT now()
+              );
+
+              INSERT INTO public.weather_readings (city, temperature_c) VALUES ('Testville', 12.3);
+              INSERT INTO public.weather_readings (city, temperature_c) VALUES ('Testville1', 11.3);
+              INSERT INTO public.weather_readings (city, temperature_c) VALUES ('Testville2', 15.3);
+
+              INSERT INTO public.weather_readings (city, temperature_c) VALUES
+                ('Seattle', 14.3),
+                ('Austin', 27.8),
+                ('Chicago', 9.1);
+
+              SELECT * FROM public.weather_readings;
+              SQL

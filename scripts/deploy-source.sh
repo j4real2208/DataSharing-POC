@@ -2,6 +2,10 @@
 set -euo pipefail
 
 SOURCE_CTX="${1:-minikube-a}"
+SINK_CTX="${2:-minikube-b}"
+CONNECT_IMAGE="${3:-local/kafka-connect:3.4.1}"
+MINIKUBE_SINK_IP="$(minikube -p "$SINK_CTX" ip)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 decode_base64() {
   if base64 --decode >/dev/null 2>&1 </dev/null; then
@@ -15,14 +19,149 @@ escape_sed() {
   printf '%s' "$1" | sed -e 's/[&|]/\\&/g'
 }
 
-delete_strimzi_rolebindings() {
-  local ns
-  for ns in $(kubectl --context "$SOURCE_CTX" get ns -o jsonpath='{.items[*].metadata.name}'); do
-    kubectl --context "$SOURCE_CTX" -n "$ns" delete rolebinding \
-      strimzi-cluster-operator-watched \
-      strimzi-cluster-operator \
-      strimzi-cluster-operator-entity-operator-delegation >/dev/null 2>&1 || true
+wait_for_deployment_rollout() {
+  local ctx="$1"
+  local ns="$2"
+  local deploy="$3"
+  local timeout="${4:-300s}"
+  kubectl --context "$ctx" -n "$ns" rollout status "deployment/$deploy" --timeout="$timeout"
+}
+
+wait_for_secret() {
+  local ctx="$1"
+  local ns="$2"
+  local secret_name="$3"
+  local retries="${4:-60}"
+  local sleep_seconds="${5:-5}"
+
+  for _ in $(seq 1 "$retries"); do
+    if kubectl --context "$ctx" -n "$ns" get secret "$secret_name" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep "$sleep_seconds"
   done
+
+  echo "Timed out waiting for secret '$secret_name' in namespace '$ns' on context '$ctx'." >&2
+  return 1
+}
+
+wait_for_source_postgres_pod_ready() {
+  local pod_name=""
+
+  echo "Waiting for source Postgres pod to be created..."
+  for _ in $(seq 1 120); do
+    pod_name="$(kubectl --context "$SOURCE_CTX" -n database get pods \
+      -l cluster-name=source-postgres \
+      -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+
+    if [ -n "$pod_name" ]; then
+      echo "Waiting for Postgres pod '$pod_name' to become Ready..."
+      kubectl --context "$SOURCE_CTX" -n database wait \
+        --for=condition=Ready "pod/$pod_name" --timeout=600s
+      return 0
+    fi
+
+    sleep 5
+  done
+
+  echo "Timed out waiting for source Postgres pod (label cluster-name=source-postgres)." >&2
+  kubectl --context "$SOURCE_CTX" -n database get pods || true
+  return 1
+}
+
+wait_for_kafka_ready() {
+  kubectl --context "$SOURCE_CTX" -n messaging wait \
+    --for=condition=Ready kafka/source-kafka --timeout=600s
+}
+
+wait_for_kafkaconnect_ready() {
+  kubectl --context "$SOURCE_CTX" -n messaging wait \
+    --for=condition=Ready kafkaconnect/source-connect --timeout=600s
+}
+
+wait_for_kafkaconnector_ready() {
+  kubectl --context "$SOURCE_CTX" -n messaging wait \
+    --for=condition=Ready kafkaconnector/source-postgres-connector --timeout=600s
+}
+
+ensure_minikube_shared_network() {
+  local network_name="minikube-shared"
+  local network_subnet="172.30.0.0/16"
+
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "docker is required for network preflight ($network_name)." >&2
+    return 1
+  fi
+
+  if docker network inspect "$network_name" >/dev/null 2>&1; then
+    echo "Docker network '$network_name' already exists."
+    return 0
+  fi
+
+  echo "Creating docker network '$network_name' with subnet '$network_subnet'..."
+  docker network create --subnet="$network_subnet" "$network_name" >/dev/null
+}
+
+ensure_connect_image_available_and_loaded() {
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "docker is required to check/build Kafka Connect image '$CONNECT_IMAGE'." >&2
+    return 1
+  fi
+
+  if docker image inspect "$CONNECT_IMAGE" >/dev/null 2>&1; then
+    echo "Kafka Connect image '$CONNECT_IMAGE' found in local Docker."
+  else
+    echo "Kafka Connect image '$CONNECT_IMAGE' not found locally. Building image..."
+    "$SCRIPT_DIR/build-connect-image.sh" "$SOURCE_CTX" "$CONNECT_IMAGE"
+  fi
+
+  echo "Loading Kafka Connect image '$CONNECT_IMAGE' into '$SOURCE_CTX' and '$SINK_CTX'..."
+  minikube -p "$SOURCE_CTX" image load "$CONNECT_IMAGE"
+  minikube -p "$SINK_CTX" image load "$CONNECT_IMAGE"
+}
+
+deploy_and_check_apicurio_registry() {
+  local apicurio_url
+  local kafka_pod
+
+  kubectl --context "$SINK_CTX" create namespace messaging --dry-run=client -o yaml | \
+    kubectl --context "$SINK_CTX" apply -f -
+
+  kubectl --context "$SINK_CTX" apply -f poc/apicurio/apicurio-registry.yaml
+  kubectl --context "$SINK_CTX" -n messaging rollout status deployment/apicurio-registry --timeout=300s
+
+
+  apicurio_url="http://${MINIKUBE_SINK_IP}:32080/apis/registry/v2/system/info"
+  echo "Checking Apicurio endpoint from source Kafka pod: $apicurio_url"
+
+  kafka_pod="$(kubectl --context "$SOURCE_CTX" -n messaging get pods \
+    -l strimzi.io/cluster=source-kafka,strimzi.io/name=source-kafka-kafka \
+    -o jsonpath='{.items[0].metadata.name}')"
+
+  if [ -z "$kafka_pod" ]; then
+    echo "Could not find source Kafka pod to run Apicurio reachability check." >&2
+    return 1
+  fi
+
+  for _ in {1..30}; do
+    if kubectl --context "$SOURCE_CTX" -n messaging exec "$kafka_pod" -- /bin/bash -ec "
+      if command -v curl >/dev/null 2>&1; then
+        curl -fsS '$apicurio_url' >/dev/null
+      elif command -v wget >/dev/null 2>&1; then
+        wget -qO- '$apicurio_url' >/dev/null
+      else
+        echo 'curl/wget not available in Kafka pod image' >&2
+        exit 1
+      fi
+    " >/dev/null 2>&1; then
+      echo "Apicurio endpoint reachable from pod '$kafka_pod'."
+      return 0
+    fi
+    sleep 2
+  done
+
+  echo "Apicurio endpoint not reachable from pod '$kafka_pod': $apicurio_url" >&2
+  return 1
 }
 
 startup_message_and_execute() {
@@ -35,38 +174,85 @@ startup_message_and_execute() {
 
   helm upgrade --install postgres-operator zalando/postgres-operator \
     -n database --kube-context "$SOURCE_CTX" --create-namespace
+  wait_for_deployment_rollout "$SOURCE_CTX" database postgres-operator 300s
 
   kubectl --context "$SOURCE_CTX" apply -f poc/postgres/source-postgres.yaml
+  wait_for_source_postgres_pod_ready
 
   helm upgrade --install apisix apisix/apisix \
     -n gateway --kube-context "$SOURCE_CTX" -f poc/apisix/values.yaml
-
-  delete_strimzi_rolebindings
 
   helm upgrade --install strimzi oci://quay.io/strimzi-helm/strimzi-kafka-operator \
     -n messaging --kube-context "$SOURCE_CTX" \
     --set watchNamespaces="{messaging}" \
     --set installCRDs=true
+  wait_for_deployment_rollout "$SOURCE_CTX" messaging strimzi-cluster-operator 300s
 
 }
 
+db_init_job() {
+  kubectl --context "$SOURCE_CTX" -n database delete job init-weather-readings --ignore-not-found
+  kubectl --context "$SOURCE_CTX" apply -f poc/postgres/init-weather-readings-job.yaml
+  kubectl --context "$SOURCE_CTX" -n database wait \
+    --for=condition=complete --timeout=180s job/init-weather-readings
+  kubectl --context "$SOURCE_CTX" -n database logs job/init-weather-readings
+}
+
+print_cdc_messages_from_connect() {
+  local connect_pod
+  local registry_url
+
+  connect_pod="$(kubectl --context "$SOURCE_CTX" -n messaging get pods \
+    -l strimzi.io/cluster=source-connect,strimzi.io/kind=KafkaConnect \
+    -o jsonpath='{.items[0].metadata.name}')"
+
+  if [ -z "$connect_pod" ]; then
+    echo "Could not find source Kafka Connect pod to print CDC messages." >&2
+    return 1
+  fi
+
+  registry_url="http://${MINIKUBE_SINK_IP}:32080/apis/registry/v2"
+  echo "Using Apicurio Registry URL: $registry_url"
+  echo "Consuming decoded CDC messages from pod '$connect_pod'..."
+  kubectl --context "$SOURCE_CTX" -n messaging exec "$connect_pod" -- /bin/bash -lc "
+CLASSPATH=\"/opt/kafka/libs/*:/opt/kafka/plugins/apicurio-converters/*\" \
+/opt/kafka/bin/kafka-console-consumer.sh \
+  --bootstrap-server source-kafka-kafka-bootstrap:9092 \
+  --topic source.public.weather_readings \
+  --from-beginning \
+  --group debug-avro-all-\$(date +%s) \
+  --skip-message-on-error \
+  --timeout-ms 30000 \
+  --formatter org.apache.kafka.tools.consumer.DefaultMessageFormatter \
+  --property key.deserializer=org.apache.kafka.common.serialization.StringDeserializer \
+  --property value.deserializer=io.apicurio.registry.serde.avro.AvroKafkaDeserializer \
+  --property value.deserializer.apicurio.registry.url=${registry_url} \
+  --property print.key=true \
+  --property print.value=true \
+  --property key.separator=\" | \"
+"
+}
+
+
+
+#ensure_minikube_shared_network
+#ensure_connect_image_available_and_loaded
 #startup_message_and_execute
-#exit
+
 
 kubectl --context "$SOURCE_CTX" apply -f poc/kafka/kafka-source.yaml
 kubectl --context "$SOURCE_CTX" apply -f poc/kafka/kafka-source-nodepool.yaml
+wait_for_kafka_ready
+
 kubectl --context "$SOURCE_CTX" apply -f poc/kafka/topics.yaml
-MINIKUBE_SINK_IP="$(minikube -p minikube-b ip)"
+deploy_and_check_apicurio_registry
+
 sed "s|<MINIKUBE_SINK>|$MINIKUBE_SINK_IP|g" poc/connect/kafka-connect-debezium.yaml \
   | kubectl --context "$SOURCE_CTX" apply -f -
+wait_for_kafkaconnect_ready
 
-for _ in {1..60}; do
-  if kubectl --context "$SOURCE_CTX" -n database get secret \
-    postgres.source-postgres.credentials.postgresql.acid.zalan.do >/dev/null 2>&1; then
-    break
-  fi
-  sleep 5
-done
+wait_for_secret "$SOURCE_CTX" database postgres.source-postgres.credentials.postgresql.acid.zalan.do 60 5
+wait_for_secret "$SOURCE_CTX" database source-user.source-postgres.credentials.postgresql.acid.zalan.do 60 5
 
 SOURCE_DB_PASSWORD=$(kubectl --context "$SOURCE_CTX" -n database get secret \
   postgres.source-postgres.credentials.postgresql.acid.zalan.do \
@@ -78,3 +264,8 @@ SOURCE_DB_PASSWORD_ESCAPED=$(escape_sed "$SOURCE_DB_PASSWORD")
 sed "s|SOURCE_DB_PASSWORD|$SOURCE_DB_PASSWORD_ESCAPED|g" \
   poc/connect/debezium-connector.yaml > "$tmpfile"
 kubectl --context "$SOURCE_CTX" apply -f "$tmpfile"
+wait_for_kafkaconnector_ready
+
+db_init_job
+
+print_cdc_messages_from_connect

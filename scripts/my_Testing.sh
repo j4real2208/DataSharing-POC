@@ -1,6 +1,9 @@
-docker network create --subnet=172.30.0.0/16 minikube-shared
+docker network create --subnet=172.30.0.0/16 minikube-shared &&
+minikube start -p minikube-a --cpus=3 --memory=6144 --kubernetes-version=v1.33.1 --network minikube-shared &&
+minikube start -p minikube-b --cpus=3 --memory=6144 --kubernetes-version=v1.33.1 --network minikube-shared
 
 psql -U postgres -d source_db -h localhost
+
 
 
 CREATE TABLE IF NOT EXISTS public.weather_readings (
