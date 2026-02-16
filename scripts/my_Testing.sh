@@ -58,3 +58,22 @@ CLASSPATH="/opt/kafka/libs/*:/opt/kafka/plugins/apicurio-converters/*" \
   --property print.key=true \
   --property print.value=true \
   --property key.separator=" | "
+
+
+------
+[kafka@sink-kafka-sink-dual-role-0 kafka]$    bin/kafka-topics.sh --list --bootstrap-server localhost:9092
+__consumer_offsets
+sink-connect-configs
+sink-connect-offsets
+sink-connect-status
+source-to-sink-config
+source-to-sink-offset
+source-to-sink-status
+source.checkpoints.internal
+source.source-connect-configs
+source.source-connect-offsets
+source.source-connect-status
+source.source.public.weather_readings
+source.weather-readings
+
+-----

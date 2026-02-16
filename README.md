@@ -5,7 +5,8 @@ This POC keeps only the essentials:
 - APISIX in each cluster
 - Kafka (Strimzi, KRaft mode) in each cluster
 - MirrorMaker2 to replicate topics from source to sink
-- Debezium on source and Debezium JDBC sink on sink to move data from Postgres -> Kafka -> Postgres
+- Kafka Connect with Debezium source on Minikube A and JDBC sink on Minikube B
+- Apicurio Registry for Avro schema and serialization/deserialization
 
 ## Architecture
 ```
@@ -14,7 +15,7 @@ This POC keeps only the essentials:
         │                                             │
         │  Postgres (source_db)                       │
         │        │                                    │
-        │        │ Debezium CDC                        │
+        │        │ Debezium CDC (Kafka Connect + Avro)│
         │        ▼                                    │
         │  Kafka (source-kafka)                       │
         │        │                                    │
@@ -29,7 +30,7 @@ This POC keeps only the essentials:
         │                                             │       │
         │  Kafka (sink-kafka) <───────────────────────────────┘
         │        │                                    │
-        │        │ JDBC Sink                           │
+        │        │ JDBC Sink (Kafka Connect)          │
         │        ▼                                    │
         │  Postgres (sink_db)                         │
         │                                             │
@@ -219,7 +220,7 @@ kubectl --context minikube-b -n messaging port-forward svc/apicurio-registry 808
 ```
 
 Console is configured to read from `sink-kafka-kafka-bootstrap:9092` and the registry at `http://apicurio-registry:8080`.
-Kafka Connect workers are configured to use Apicurio for JSON Schema; rebuild and reload the Connect image after changes:
+Kafka Connect workers are configured to use Apicurio with the Avro converter; rebuild and reload the Connect image after changes:
 ```bash
 ./scripts/build-connect-image.sh minikube-a
 ./scripts/build-connect-image.sh minikube-b
