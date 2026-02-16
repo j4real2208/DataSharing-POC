@@ -168,6 +168,18 @@ deploy_and_check_apicurio_registry() {
   return 1
 }
 
+deploy_and_check_redpanda_console() {
+  local tmpfile
+
+  echo "Deploying Redpanda Console on sink cluster..."
+  tmpfile="$(mktemp)"
+  sed "s|<MINIKUBE_SINK>|$MINIKUBE_SINK_IP|g" poc/redpanda/redpanda-console.yaml > "$tmpfile"
+  kubectl --context "$SINK_CTX" apply -f "$tmpfile"
+  rm -f "$tmpfile"
+  wait_for_deployment_rollout "$SINK_CTX" messaging redpanda-console 300s
+  echo "Redpanda Console deployment is ready."
+}
+
 startup_message_and_execute() {
   echo "Deploying sink cluster components to context '$SINK_CTX'..."
   kubectl --context "$SINK_CTX" apply -f poc/00-namespaces.yaml
@@ -290,6 +302,7 @@ kubectl --context "$SINK_CTX" apply -f poc/kafka/kafka-sink-nodepool.yaml
 wait_for_kafka_ready
 
 deploy_and_check_apicurio_registry
+deploy_and_check_redpanda_console
 
 sed "s|<MINIKUBE_SINK>|$MINIKUBE_SINK_IP|g" poc/connect/kafka-connect-jdbc-sink.yaml \
   | kubectl --context "$SINK_CTX" apply -f -

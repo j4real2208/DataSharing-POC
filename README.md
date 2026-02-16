@@ -80,7 +80,7 @@ This POC keeps only the essentials:
 ```
 
 ## 1) Prereqs
-- `minikube`, `kubectl`, `helm` installed
+- `minikube`, `kubectl`, `helm`, `docker` installed
 - Two minikube profiles: `minikube-a` (source) and `minikube-b` (sink)
 - If using the Docker driver, create a shared network for the clusters:
   ```bash
@@ -89,20 +89,16 @@ This POC keeps only the essentials:
 
 ## 2) Start clusters
 ```bash
-minikube start -p minikube-a --cpus=3 --memory=6144 --kubernetes-version=v1.29.0 --network minikube-shared
-minikube start -p minikube-b --cpus=3 --memory=6144 --kubernetes-version=v1.29.0 --network minikube-shared
+K8S_VERSION=v1.31.0
+minikube start -p minikube-a --cpus=3 --memory=6144 --kubernetes-version=$K8S_VERSION --network minikube-shared
+minikube start -p minikube-b --cpus=3 --memory=6144 --kubernetes-version=$K8S_VERSION --network minikube-shared
 ```
 
-## 3) Deploy source and sink
-Build the Kafka Connect image (includes Debezium + JDBC connectors) and load it into each cluster:
+## 3) Deploy source and sink (gated scripts)
+`deploy-source.sh` and `deploy-sink.sh` include readiness gates and image/network preflight checks.
 ```bash
-./scripts/build-connect-image.sh minikube-a
-./scripts/build-connect-image.sh minikube-b
-```
-
-```bash
-./scripts/deploy-source.sh minikube-a
-./scripts/deploy-sink.sh minikube-b
+./scripts/deploy-source.sh minikube-a minikube-b local/kafka-connect:3.4.1
+./scripts/deploy-sink.sh minikube-b minikube-a local/kafka-connect:3.4.1
 ```
 
 If you see errors like `unknown field "spec.kafka.kraft"` your Strimzi CRDs are too old for KRaft.
@@ -112,21 +108,25 @@ CONFIRM=YES ./scripts/refresh-strimzi-crds.sh minikube-a
 CONFIRM=YES ./scripts/refresh-strimzi-crds.sh minikube-b
 ```
 
-## 4) Configure MirrorMaker2
-Get the sink bootstrap address (NodePort on the sink cluster):
+## 4) MirrorMaker2
+`deploy-sink.sh` now deploys MirrorMaker2 automatically (from `minikube-a` to `minikube-b`) and waits for it to become ready.
+You can still run MirrorMaker2 manually if needed:
 ```bash
 SINK_IP=$(minikube -p minikube-b ip)
 SINK_PORT=$(kubectl --context minikube-b -n messaging get svc sink-kafka-kafka-external-bootstrap -o jsonpath='{.spec.ports[0].nodePort}')
-
-echo "$SINK_IP:$SINK_PORT"
-```
-Deploy MirrorMaker2 on the source cluster:
-```bash
 ./scripts/deploy-mirrormaker.sh minikube-a "$SINK_IP:$SINK_PORT"
 ```
 
-## 5) Create source table and insert data
-Create a table in source Postgres and insert a few rows.
+## 5) Source data initialization
+`deploy-source.sh` runs the `init-weather-readings` job automatically.  
+Manual run/re-run:
+```bash
+kubectl --context=minikube-a -n database delete job init-weather-readings --ignore-not-found
+kubectl --context=minikube-a apply -f poc/postgres/init-weather-readings-job.yaml
+kubectl --context=minikube-a -n database logs -f job/init-weather-readings
+```
+
+Optional direct SQL method:
 ```bash
 SOURCE_DB_PASSWORD=$(kubectl --context minikube-a -n database get secret \
   postgres.source-postgres.credentials.postgresql.acid.zalan.do \
@@ -152,22 +152,7 @@ SQL
 
 Debezium will emit CDC events into Kafka (topics with prefix `source`).
 
-### Option B: run the Kubernetes init job
-`./scripts/deploy-source.sh minikube-a` now runs this job automatically.  
-Use these commands to run/re-run it manually.
-This uses `poc/postgres/init-weather-readings-job.yaml` and runs the SQL from inside the cluster against `source-postgres`.
-```bash
-kubectl --context=minikube-a apply -f poc/postgres/init-weather-readings-job.yaml
-kubectl --context=minikube-a -n database logs -f job/init-weather-readings
-```
-
-Re-run the job:
-```bash
-kubectl --context=minikube-a -n database delete job init-weather-readings
-kubectl --context=minikube-a apply -f poc/postgres/init-weather-readings-job.yaml
-```
-
-### Option C: read decoded CDC messages from the existing source Connect pod
+## 6) Read decoded CDC messages on source
 Use the running Kafka Connect pod (`source-connect`) to consume and print decoded Avro messages from `source.public.weather_readings`.
 ```bash
 CONNECT_POD=$(kubectl --context=minikube-a -n messaging get pods \
@@ -186,7 +171,7 @@ CLASSPATH="/opt/kafka/libs/*:/opt/kafka/plugins/apicurio-converters/*" \
   --formatter org.apache.kafka.tools.consumer.DefaultMessageFormatter \
   --property key.deserializer=org.apache.kafka.common.serialization.StringDeserializer \
   --property value.deserializer=io.apicurio.registry.serde.avro.AvroKafkaDeserializer \
-  --property value.deserializer.apicurio.registry.url=http://172.17.0.3:32080/apis/registry/v2 \
+  --property value.deserializer.apicurio.registry.url=http://'"$(minikube -p minikube-b ip)"':32080/apis/registry/v2 \
   --property print.key=true \
   --property print.value=true \
   --property key.separator=" | "
@@ -194,7 +179,16 @@ CLASSPATH="/opt/kafka/libs/*:/opt/kafka/plugins/apicurio-converters/*" \
 ```
 You should see rows printed as key/value records (or no output if the topic has no matching messages yet).
 
-## 6) Verify data landed in sink Postgres
+## 7) Sink-side consume + table validation
+`deploy-sink.sh` now performs all of the following automatically:
+- deploys and waits for sink Kafka, sink Connect, sink JDBC connector
+- deploys and checks Apicurio endpoint from inside a sink Kafka pod
+- deploys and waits for Redpanda Console (`deployment/redpanda-console`)
+- deploys MirrorMaker2 and waits for `source-to-sink` to be ready
+- consumes `source.source.public.weather_readings` from sink Connect pod
+- validates data in `sink_db.public.weather_readings` by exec'ing into sink Postgres pod
+
+Manual SQL validation:
 ```bash
 SINK_DB_PASSWORD=$(kubectl --context minikube-b -n database get secret \
   sink-user.sink-postgres.credentials.postgresql.acid.zalan.do \
@@ -206,8 +200,9 @@ kubectl --context minikube-b -n database run -it --rm psql \
   psql -h sink-postgres -U sink-user -d sink_db -c "SELECT * FROM public.weather_readings;"
 ```
 
-## 7) Redpanda Console + Apicurio Registry (optional)
-Deploy Apicurio Registry (with PVC) plus Redpanda Console:
+## 8) Redpanda Console + Apicurio Registry
+`deploy-sink.sh` deploys both automatically.  
+Manual apply (if needed):
 ```bash
 kubectl --context minikube-b -n messaging apply -f poc/apicurio/apicurio-registry.yaml
 kubectl --context minikube-b -n messaging apply -f poc/redpanda/redpanda-console.yaml

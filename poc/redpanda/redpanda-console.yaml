@@ -9,9 +9,9 @@ data:
       brokers:
         - sink-kafka-kafka-bootstrap:9092
       schemaRegistry:
-        enabled: false
+        enabled: true
         urls:
-          - http://apicurio-registry:8080/apis/ccompat/v7
+          - http://<MINIKUBE_SINK>:32080/apis/ccompat/v7
     server:
       listenPort: 8080
 ---

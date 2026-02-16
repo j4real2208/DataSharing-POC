@@ -235,9 +235,9 @@ CLASSPATH=\"/opt/kafka/libs/*:/opt/kafka/plugins/apicurio-converters/*\" \
 
 
 
-#ensure_minikube_shared_network
-#ensure_connect_image_available_and_loaded
-#startup_message_and_execute
+ensure_minikube_shared_network
+ensure_connect_image_available_and_loaded
+startup_message_and_execute
 
 
 kubectl --context "$SOURCE_CTX" apply -f poc/kafka/kafka-source.yaml
