@@ -198,38 +198,46 @@ db_init_job() {
   kubectl --context "$SOURCE_CTX" -n database logs job/init-weather-readings
 }
 
+deploy_source_redpanda_console() {
+   echo "Deploying source Redpanda Console..."
+   sed "s|<MINIKUBE_SINK>|$MINIKUBE_SINK_IP|g" poc/redpanda/redpanda-console-source.yaml \
+     | kubectl --context "$SOURCE_CTX" apply -f -
+   kubectl --context "$SOURCE_CTX" -n messaging rollout status deployment/redpanda-console-source --timeout=120s
+   echo "Source Redpanda Console deployed successfully."
+}
+
 print_cdc_messages_from_connect() {
-  local connect_pod
-  local registry_url
+   local connect_pod
+   local registry_url
 
-  connect_pod="$(kubectl --context "$SOURCE_CTX" -n messaging get pods \
-    -l strimzi.io/cluster=source-connect,strimzi.io/kind=KafkaConnect \
-    -o jsonpath='{.items[0].metadata.name}')"
+   connect_pod="$(kubectl --context "$SOURCE_CTX" -n messaging get pods \
+     -l strimzi.io/cluster=source-connect,strimzi.io/kind=KafkaConnect \
+     -o jsonpath='{.items[0].metadata.name}')"
 
-  if [ -z "$connect_pod" ]; then
-    echo "Could not find source Kafka Connect pod to print CDC messages." >&2
-    return 1
-  fi
+   if [ -z "$connect_pod" ]; then
+     echo "Could not find source Kafka Connect pod to print CDC messages." >&2
+     return 1
+   fi
 
-  registry_url="http://${MINIKUBE_SINK_IP}:32080/apis/registry/v2"
-  echo "Using Apicurio Registry URL: $registry_url"
-  echo "Consuming decoded CDC messages from pod '$connect_pod'..."
-  kubectl --context "$SOURCE_CTX" -n messaging exec "$connect_pod" -- /bin/bash -lc "
+   registry_url="http://${MINIKUBE_SINK_IP}:32080/apis/registry/v2"
+   echo "Using Apicurio Registry URL: $registry_url"
+   echo "Consuming decoded CDC messages from pod '$connect_pod'..."
+   kubectl --context "$SOURCE_CTX" -n messaging exec "$connect_pod" -- /bin/bash -lc "
 CLASSPATH=\"/opt/kafka/libs/*:/opt/kafka/plugins/apicurio-converters/*\" \
 /opt/kafka/bin/kafka-console-consumer.sh \
-  --bootstrap-server source-kafka-kafka-bootstrap:9092 \
-  --topic source.public.weather_readings \
-  --from-beginning \
-  --group debug-avro-all-\$(date +%s) \
-  --skip-message-on-error \
-  --timeout-ms 30000 \
-  --formatter org.apache.kafka.tools.consumer.DefaultMessageFormatter \
-  --property key.deserializer=org.apache.kafka.common.serialization.StringDeserializer \
-  --property value.deserializer=io.apicurio.registry.serde.avro.AvroKafkaDeserializer \
-  --property value.deserializer.apicurio.registry.url=${registry_url} \
-  --property print.key=true \
-  --property print.value=true \
-  --property key.separator=\" | \"
+   --bootstrap-server source-kafka-kafka-bootstrap:9092 \
+   --topic source.public.weather_readings \
+   --from-beginning \
+   --group debug-avro-all-\$(date +%s) \
+   --skip-message-on-error \
+   --timeout-ms 30000 \
+   --formatter org.apache.kafka.tools.consumer.DefaultMessageFormatter \
+   --property key.deserializer=org.apache.kafka.common.serialization.StringDeserializer \
+   --property value.deserializer=io.apicurio.registry.serde.avro.AvroKafkaDeserializer \
+   --property value.deserializer.apicurio.registry.url=${registry_url} \
+   --property print.key=true \
+   --property print.value=true \
+   --property key.separator=\" | \"
 "
 }
 
@@ -267,5 +275,7 @@ kubectl --context "$SOURCE_CTX" apply -f "$tmpfile"
 wait_for_kafkaconnector_ready
 
 db_init_job
+
+deploy_source_redpanda_console
 
 print_cdc_messages_from_connect

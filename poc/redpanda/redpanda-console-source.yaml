@@ -1,13 +1,13 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: redpanda-console-config
+  name: redpanda-console-source-config
   namespace: messaging
 data:
   config.yaml: |
     kafka:
       brokers:
-        - sink-kafka-kafka-bootstrap:9092
+        - source-kafka-kafka-bootstrap:9092
       schemaRegistry:
         enabled: true
         urls:
@@ -15,29 +15,29 @@ data:
     connect:
       enabled: true
       clusters:
-        - name: "sink-connect"
-          url: "http://sink-connect-connect-api:8083"
+        - name: "source-connect"
+          url: "http://source-connect-connect-api:8083"
     server:
       listenPort: 8080
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: redpanda-console
+  name: redpanda-console-source
   namespace: messaging
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: redpanda-console
+      app: redpanda-console-source
   template:
     metadata:
       labels:
-        app: redpanda-console
+        app: redpanda-console-source
     spec:
       containers:
         - name: redpanda-console
-          image: docker.redpanda.com/redpandadata/console:v2.6.0
+          image: docker.redpanda.com/redpandadata/console:v2.8.0
           args:
             - --config.filepath=/etc/console/config.yaml
           ports:
@@ -49,7 +49,7 @@ spec:
       volumes:
         - name: console-config
           configMap:
-            name: redpanda-console-config
+            name: redpanda-console-source-config
             items:
               - key: config.yaml
                 path: config.yaml
@@ -57,12 +57,13 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: redpanda-console
+  name: redpanda-console-source
   namespace: messaging
 spec:
   selector:
-    app: redpanda-console
+    app: redpanda-console-source
   ports:
     - name: http
       port: 8080
       targetPort: 8080
+

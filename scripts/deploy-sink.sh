@@ -302,11 +302,12 @@ kubectl --context "$SINK_CTX" apply -f poc/kafka/kafka-sink-nodepool.yaml
 wait_for_kafka_ready
 
 deploy_and_check_apicurio_registry
-deploy_and_check_redpanda_console
 
 sed "s|<MINIKUBE_SINK>|$MINIKUBE_SINK_IP|g" poc/connect/kafka-connect-jdbc-sink.yaml \
   | kubectl --context "$SINK_CTX" apply -f -
 wait_for_kafkaconnect_ready
+
+deploy_and_check_redpanda_console
 
 wait_for_secret "$SINK_CTX" database sink-user.sink-postgres.credentials.postgresql.acid.zalan.do 60 5
 
